@@ -71,14 +71,14 @@ class _Optimizer:
         self._grad: np.ndarray = self._f(self._x).grad
 
         # Backtracking init
-        self._alpha = backtrack_alpha
-        self._lambda = backtrack_lambda
-        self._eps = backtrack_eps
+        self._alpha: float = backtrack_alpha
+        self._lambda: float = backtrack_lambda
+        self._eps: float = backtrack_eps
 
         # Stopping Criterion
         self._max_iter: int = max_iter
         self._delta: float = delta
-        self._logging_steps = logging_steps
+        self._logging_steps: int = logging_steps
 
         # Logging List
         self.history: Dict[str, list] = {
@@ -145,10 +145,201 @@ class _Optimizer:
         return self.__class__.__name__ + '()'
 
 
+class NelderMead(_Optimizer):
+    """
+    Nelder–Mead (downhill simplex) method for unconstrained optimization without derivatives.
+
+    Builds and deforms a simplex in n-dimensional space by repeatedly performing
+    reflection, expansion, contraction, and shrink steps to approach a local minimum.
+
+    History:
+        'points': list of simplex best vertex after each iteration
+    """
+    def __init__(
+            self,
+            function: _Function,
+            x_start: Union[Sequence[float], np.ndarray],
+            alpha: float = 1.0,
+            gamma: float = 2.0,
+            rho: float = 0.5,
+            sigma: float = 0.5,
+            delta: float = 1e-6,
+            max_iter: int = 10 ** 6,
+            logging_steps: int = 0
+    ) -> None:
+        """
+        Initialize the Nelder–Mead optimizer.
+
+        :param function: Target _Function to minimize (must output scalar)
+        :param x_start: Initial point, array-like of shape (ndim)
+        :param alpha: Reflection coefficient (default 1.0)
+        :param gamma: Expansion coefficient (default 2.0)
+        :param rho: Contraction coefficient (default 0.5)
+        :param sigma: Shrink (reduction) coefficient (default 0.5)
+        :param delta: Convergence tolerance on simplex spread (default 1e-6)
+        :param max_iter: Maximum number of iterations (default 1e6)
+        :param logging_steps: If >0, update a tqdm progress bar every this many steps
+        """
+
+        super().__init__(
+            function,
+            x_start,
+            delta=delta,
+            max_iter=max_iter,
+            logging_steps=logging_steps
+        )
+
+        # Turn off gradient and hessian calculating
+        self._f.requires_grad = False
+        self._f.requires_hess = False
+
+        # Method parameters
+        self._alpha: float = alpha
+        self._gamma: float = gamma
+        self._rho: float = rho
+        self._sigma: float = sigma
+
+        # Logging List
+        self.history: Dict[str, list] = {
+            'points': [x_start.copy()]
+        }
+
+        # Init simplex
+        self._simplex = [self._x.copy()]
+
+        for i in range(self._f.ndim):
+            val = self._x.copy()
+            val[i] += 0.05 * (val[i] if val[i] != 0 else 1.0)
+
+            self._simplex.append(val)
+
+        self._simplex = np.array(self._simplex)
+        self._f_simplex = self._f(self._simplex).item
+
+    @_counter
+    def _step(self) -> None:
+        """
+        Perform one Nelder–Mead update on the current simplex:
+
+        1. Sort vertices by function value.
+        2. Compute centroid of all but the worst point.
+        3. Reflect worst point across centroid.
+        4. If reflection improves beyond best, try expansion.
+        5. Else if reflection is intermediate, accept it.
+        6. Else if reflection is better than worst, perform external contraction.
+        7. Else perform internal contraction or shrink entire simplex.
+        8. Update current estimate to the best vertex.
+        """
+
+        sorted_ids = np.argsort(self._f_simplex)
+        self._simplex = self._simplex[sorted_ids]
+        self._f_simplex = self._f_simplex[sorted_ids]
+
+        x_min, x_max = self._simplex[[0, -1]]
+        x_centre = np.mean(self._simplex[:-1], axis=0)
+
+        f_min, f_second, f_max = self._f_simplex[[0, -2, -1]]
+
+        x_r = (1 + self._alpha) * x_centre - self._alpha * x_max
+        f_r = self._f(x_r).item
+
+        if f_r < f_min:  # Расширение
+            x_e = (1 - self._gamma) * x_centre + self._gamma * x_r
+            f_e = self._f(x_e).item
+
+            self._simplex[-1], self._f_simplex[-1] = (x_e, f_e) if f_e < f_r else (x_r, f_r)
+
+        elif f_min <= f_r < f_second:  # Отражение
+            self._simplex[-1], self._f_simplex[-1] = x_r, f_r
+
+        elif f_second <= f_r < f_max:
+            # Внешнее сжатие
+            x_c = (1 - self._rho) * x_centre + self._rho * x_r
+            f_c = self._f(x_c).item
+
+            self._simplex[-1], self._f_simplex[-1] = x_c, f_c
+
+        else:  # Сжатие
+            x_c = (1 - self._rho) * x_centre + self._rho * x_max
+            f_c = self._f(x_c).item
+
+            if f_c < self._f_simplex[-1]:
+                self._simplex[-1], self._f_simplex[-1] = x_c, f_c
+            else:
+                for i in range(1, self._f.ndim + 1):
+                    self._simplex[i] = (1 - self._sigma) * x_min + self._sigma * self._simplex[i]
+                    self._f_simplex[i] = self._f(self._simplex[i]).item
+
+        # Update point
+        self._x = self._simplex[min(range(self._f_simplex.shape[0]), key=lambda idx: self._f_simplex[idx])]
+
+    def argmin(self) -> np.ndarray:
+        """
+        Run the Nelder–Mead algorithm until convergence or max_iter reached.
+
+        :return: Estimated minimizer as ndarray of shape (ndim)
+        """
+
+        item_norm = np.linalg.norm(self._f(self._x).item)
+        progress_bar = tqdm(desc=f"‖value‖ = {item_norm:.2e}") if self._logging_steps > 0 else None
+
+        # Stopping criterion
+        while self._f_simplex.max() - self._f_simplex.min() > self._delta and self._step.count < self._max_iter:
+            self._step()
+
+            # Save point
+            self.history['points'].append(self._x.copy())
+
+            # Calculate current item norm
+            item_norm = np.linalg.norm(self._f(self._x).item)
+
+            if self._logging_steps > 0:  # Update progress bar
+                if self._step.count % self._logging_steps == 0:
+                    progress_bar.set_description_str(f"‖value‖ = {item_norm:.2e}")
+
+                progress_bar.update(1)
+
+        # Reset steps counts
+        self.__class__._step.count = 0
+
+        if self._logging_steps > 0:
+            progress_bar.close()
+
+        return self._x
+
+
 class GradientDescent(_Optimizer):
     """
     Classic gradient descent with optional exact line search
     """
+
+    def __init__(
+            self,
+            function: _Function,
+            x_start: Union[Sequence[float], np.ndarray],
+            backtrack_alpha: float = 1,
+            backtrack_lambda: float = 0.5,
+            backtrack_eps: float = 1e-4,
+            delta: float = 1e-6,
+            max_iter: int = 10 ** 6,
+            logging_steps: int = 0
+    ) -> None:
+
+        # Turn on gradient calculating
+        function.requires_grad = True
+        function.requires_hess = False
+
+        super().__init__(
+            function,
+            x_start,
+            backtrack_alpha,
+            backtrack_lambda,
+            backtrack_eps,
+            delta,
+            max_iter,
+            logging_steps
+        )
+
     def _backtracking(self) -> float:
         """
         Line-search with backtracking
@@ -204,6 +395,10 @@ class ConjugateGradient(_Optimizer):
             logging_steps: int = 0
     ) -> None:
 
+        # Turn on gradient calculating
+        function.requires_grad = True
+        function.requires_hess = False
+
         super().__init__(
             function,
             x_start,
@@ -216,7 +411,7 @@ class ConjugateGradient(_Optimizer):
         )
 
         # Keep direction vector, combines current gradient and last chosen direction
-        self._dir: np.ndarray = -self._grad.copy()
+        self._dir: np.ndarray = -self._f(self._x).grad.copy()
 
     def _backtracking(self) -> float:
         """
@@ -264,6 +459,14 @@ class ConjugateGradient(_Optimizer):
 
 
 class NewtonMethod(_Optimizer):
+    """
+    Newton's method with exact line search (when Hessian may be indefinite).
+
+    Attributes:
+        like a base class _Optimizer attributes
+        +
+        _inv_hess (np.ndarray): Current inverse Hessian matrix
+    """
     def __init__(
             self,
             function: _Function,
@@ -275,6 +478,11 @@ class NewtonMethod(_Optimizer):
             max_iter: int = 10 ** 6,
             logging_steps: int = 0
     ) -> None:
+
+        # Turn on gradient and hessian calculating
+        function.requires_grad = True
+        function.requires_hess = True
+
         super().__init__(
             function,
             x_start,
@@ -286,15 +494,8 @@ class NewtonMethod(_Optimizer):
             logging_steps
         )
 
-        self._dir: np.ndarray = -np.linalg.solve(self._f.hess, self._grad)
-    """
-    Newton's method with exact line search (when Hessian may be indefinite).
-
-    Attributes:
-        like a base class _Optimizer attributes
-        +
-        _inv_hess (np.ndarray): Current inverse Hessian matrix
-    """
+        # Keep direction vector, combines current jacobian and current hessian
+        self._dir: np.ndarray = -np.linalg.solve(self._f(self._x).hess, self._grad)
 
     def _backtracking(self) -> float:
         """

@@ -3,6 +3,7 @@
 ---
 
 Этот проект демонстрирует работу трёх классических методов оптимизации:
+- Метод деформируемого многогранника
 - Метод градиентного спуска
 - Метод сопряжённых градиентов
 - Метод Ньютона
@@ -13,6 +14,7 @@
 
 ---
 
+![Trajectory of Gradient Descent](assets/nelder_mead.png)
 ![Trajectory of Gradient Descent](assets/gradient_descent.png)
 ![Trajectory of Gradient Descent](assets/conjugate_gradients.png)
 ![Trajectory of Gradient Descent](assets/newton_method.png)
@@ -79,7 +81,7 @@ GRADIENT_DESCENT_RB_PARAMS = {
   - `_compute_grad(x)` — градиент
   - `_compute_hess(x)` — (опционально) гессиан
 
-- **Новый оптимизатор**: в `packages/optim.py` унаследуйтесь от `_Optimizer` и реализуйте методы `_backtracking()` (line search) и `_step()` (обновление). При необходимости, можно добавлять/удалять/изменять аттрибуты и методы.
+- **Новый оптимизатор**: в `packages/optim.py` унаследуйтесь от `_Optimizer` и реализуйте методы `_backtracking()` (line search), если нужно считать градиенты и длину шага, и `_step()` (обновление). При необходимости, можно добавлять/удалять/изменять аттрибуты и методы.
 
 ## Используемые библиотеки
 

@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from packages.helpers import plot_surface, pipeline
 from packages.functions import Rosenbrock, Himmelblau
 from packages import config
-from packages.optim import GradientDescent, ConjugateGradient, NewtonMethod
+from packages.optim import GradientDescent, ConjugateGradient, NewtonMethod, NelderMead
 
 
 def main():
@@ -13,6 +13,11 @@ def main():
 
     # Выполняем методы
     named_methods = {
+        'Метод деформируемого многогранника': (
+            NelderMead,
+            config.NELDERMEAD_RB_PARAMS,
+            config.NELDERMEAD_HB_PARAMS
+        ),
         'Метод Градиентного Спуска': (
             GradientDescent,
             config.GRADIENT_DESCENT_RB_PARAMS,
@@ -36,11 +41,6 @@ def main():
         # Разделим на два графика
         fig, (ax_rb, ax_hb) = plt.subplots(1, 2, figsize=(16, 6))
         fig.suptitle(name)
-
-        # Оставим подсчет Гессиана только для метода Ньютона
-        if name == 'Метод Ньютона':
-            rb.requires_hess = True
-            hb.requires_hess = True
 
         print('Функция Розенброка')
         # Отображаем поверхность
